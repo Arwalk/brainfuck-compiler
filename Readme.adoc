@@ -1,0 +1,17 @@
+= Brainfuck to zig compiler
+
+Have you ever wanted to have performance in your brainfuck code? Look no further.
+
+This build scripts accepts a brainfuck file as the environment variable `BF_FILE_PATH`, generates a zig file with it, and compiles it as `program` in your usual `zig-out/bin` output folder.
+
+As an example, `helloworld.bf` is available. On linux, just run `BF_FILE_PATH=./helloworld.bf zig build` to compile and generate.
+
+The generated zig file is available in the `generated` folder for reference.
+
+== Why ?
+
+Why not?
+
+== Future plans
+
+Optimisations, because why not?
