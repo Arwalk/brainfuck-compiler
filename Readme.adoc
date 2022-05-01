@@ -14,4 +14,4 @@ Why not?
 
 == Future plans
 
-Optimisations, because why not?
+Optimisations, because see section <<why>>
