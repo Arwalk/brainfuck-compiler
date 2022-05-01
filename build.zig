@@ -22,7 +22,7 @@ pub fn build(b: *Builder) !void {
     const gpa = general_purpose_allocator.allocator();
     
     const file_path = std.process.getEnvVarOwned(gpa, "BF_FILE_PATH") catch null;
-    try std.io.getStdOut().writer().print("{s}", .{file_path});
+
     if(file_path) |path| {
         const file_name = std.fs.path.basename(path);
         var temp_file_name : []u8 = try std.fmt.allocPrint(gpa, "{s}.zig", .{file_name});

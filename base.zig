@@ -5,20 +5,20 @@ const BrainfuckState = struct {
     data_pointer: u16,
 
 
-    pub fn push_data_pointer(self: *BrainfuckState) void {
-        self.data_pointer +%= 1;
+    pub fn push_data_pointer(self: *BrainfuckState, value : u16) void {
+        self.data_pointer +%= value;
     }
 
-    pub fn pop_data_pointer(self: *BrainfuckState) void {
-        self.data_pointer -%= 1;
+    pub fn pop_data_pointer(self: *BrainfuckState, value : u16) void {
+        self.data_pointer -%= value;
     }
 
-    pub fn increment_current_data(self: *BrainfuckState) void {
-        self.data[self.data_pointer] +%= 1;
+    pub fn increment_current_data(self: *BrainfuckState, value : u8) void {
+        self.data[self.data_pointer] +%= value;
     }
 
-    pub fn decrement_current_data(self: *BrainfuckState) void {
-        self.data[self.data_pointer] -%= 1;
+    pub fn decrement_current_data(self: *BrainfuckState, value : u8) void {
+        self.data[self.data_pointer] -%= value;
     }
 
     pub fn print_current_data(self: *BrainfuckState) !void {
