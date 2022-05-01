@@ -13,6 +13,10 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
 
     try out_buffer.appendSlice(base);
 
+    
+    try out_buffer.appendSlice("pub fn main() !void {");
+    try out_buffer.appendSlice("    var state = BrainfuckState.init();");
+
     var indent : usize = 4;
     var linebreak : u8 = '\n';
 
@@ -40,7 +44,7 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
                 try out_buffer.appendSlice("}");
                 try out_buffer.append(linebreak);
             },
-            else => {}
+            else => continue
         }
         try out_buffer.append(linebreak);
     }

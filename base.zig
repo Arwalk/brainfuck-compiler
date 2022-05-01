@@ -27,7 +27,7 @@ const BrainfuckState = struct {
 
     pub fn input_char(self: *BrainfuckState) !void {
         var buf : [1]u8 = undefined;
-        try std.io.getStdIn().reader().readUntilDelimiterOrEof(buf[0..], '\n');            
+        _ = try std.io.getStdIn().reader().readUntilDelimiterOrEof(buf[0..], '\n');            
         self.data[self.data_pointer] = buf[0];
     }
 
@@ -42,6 +42,3 @@ const BrainfuckState = struct {
         };
     }
 };
-
-pub fn main() !void {
-    var state = BrainfuckState.init();
