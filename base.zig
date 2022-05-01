@@ -25,14 +25,29 @@ const BrainfuckState = struct {
         try std.io.getStdOut().writer().print("{c}", .{self.data[self.data_pointer]});
     }
 
+
     pub fn input_char(self: *BrainfuckState) !void {
-        var buf : [2]u8 = undefined;
+        var reader = std.io.getStdIn().reader();
         while(true) {
-            if(std.io.getStdIn().reader().readUntilDelimiterOrEof(buf[0..], '\n')) |_| {
-                self.data[self.data_pointer] = buf[0];
+            var readbuf : [2]u8 = .{0, 0};
+            if(reader.readUntilDelimiter(&readbuf, '\n')) |buf| {
+                try std.io.getStdOut().writer().print("ok.\n", .{});
+                if(buf.len == 0) {
+                    self.data[self.data_pointer] = '\n';
+                }
+                else {
+                    self.data[self.data_pointer] = buf[0];
+                }
                 break;
+                
             } else |_| {
-                std.io.getStdOut().writer().print("Expecting only one character.\n", .{}) catch unreachable;
+                try std.io.getStdOut().writer().print("Expecting only one character.\n", .{});
+                while(true) {
+                    var clearer = try reader.readUntilDelimiter(&readbuf, '\n');
+                    if(clearer.len == 0) {
+                        break;
+                    }
+                }
             }
         }
     }
