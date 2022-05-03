@@ -2,31 +2,31 @@ const std = @import("std");
 
 const BrainfuckState = struct {
     data : [std.math.maxInt(u16)]u8,
-    data_pointer: u16,
+    data_pointer: [*]u8,
 
 
-    pub fn push_data_pointer(self: *BrainfuckState, value : u16) void {
-        self.data_pointer +%= value;
+    pub fn push_data_pointer(self: *BrainfuckState, value : usize) void {
+        self.data_pointer += value;
     }
 
-    pub fn pop_data_pointer(self: *BrainfuckState, value : u16) void {
-        self.data_pointer -%= value;
+    pub fn pop_data_pointer(self: *BrainfuckState, value : usize) void {
+        self.data_pointer -= value;
     }
 
     pub fn increment_current_data(self: *BrainfuckState, value : u8) void {
-        self.data[self.data_pointer] +%= value;
+        self.data_pointer[0] +%= value;
     }
 
     pub fn decrement_current_data(self: *BrainfuckState, value : u8) void {
-        self.data[self.data_pointer] -%= value;
+        self.data_pointer[0] -%= value;
     }
 
     pub fn print_current_data(self: *BrainfuckState) !void {
-        try std.io.getStdOut().writer().print("{c}", .{self.data[self.data_pointer]});
+        try std.io.getStdOut().writer().print("{c}", .{self.data_pointer[0]});
     }
 
     pub fn is_current_value_pointed_not_0(self: *BrainfuckState) bool {
-        return self.data[self.data_pointer] != 0;
+        return self.data_pointer[0] != 0;
     }
 
     pub fn input_char(self: *BrainfuckState) !void {
@@ -36,10 +36,10 @@ const BrainfuckState = struct {
             if(reader.readUntilDelimiter(&readbuf, '\n')) |buf| {
                 try std.io.getStdOut().writer().print("ok.\n", .{});
                 if(buf.len == 0) {
-                    self.data[self.data_pointer] = '\n';
+                    self.data_pointer[0] = '\n';
                 }
                 else {
-                    self.data[self.data_pointer] = buf[0];
+                    self.data_pointer[0] = buf[0];
                 }
                 break;
                 
@@ -56,9 +56,13 @@ const BrainfuckState = struct {
     }
 
     pub fn init() BrainfuckState {
-        return .{
+        var temp = [1]u8{0};
+        var struc = BrainfuckState{
             .data = [1]u8{0} ** 65535,
-            .data_pointer = 0
+            .data_pointer = &temp
         };
+        struc.data_pointer = &struc.data;
+
+        return struc;
     }
 };
