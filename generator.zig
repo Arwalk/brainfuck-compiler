@@ -55,7 +55,7 @@ const Tokenizer = struct {
 
     pub fn next(self: *Tokenizer) ?BfOp {
         
-        if(self.index > self.buffer.len) {
+        if(self.index >= self.buffer.len) {
             return null;
         }
         
@@ -90,6 +90,7 @@ const Tokenizer = struct {
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expect = testing.expect;
 const hello_world = @embedFile("helloworld.bf");
 
 test "test tokenizer" {
@@ -154,6 +155,8 @@ test "test tokenizer" {
     try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
     try expectEqual(BfOp{.inc = 2}, tokenizer.next().?);
     try expectEqual(BfOp.print, tokenizer.next().?);
+    try expect(tokenizer.next() == null);
+    try expect(tokenizer.next() == null);
 
 }
 
