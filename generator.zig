@@ -162,15 +162,17 @@ test "test tokenizer" {
 
 pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
     const base = @embedFile("base.zig");
+    const linebreak : u8 = '\n';
 
     try out_buffer.appendSlice(base);
 
     
     try out_buffer.appendSlice("pub fn main() !void {");
+    try out_buffer.append(linebreak);
     try out_buffer.appendSlice("    var state = BrainfuckState.init();");
+    try out_buffer.append(linebreak);
 
     var indent : usize = 4;
-    var linebreak : u8 = '\n';
 
     var tokenizer = Tokenizer.init(buffer);
     var printer = [_]u8{0} ** 100;
