@@ -56,4 +56,8 @@ pub fn build(b: *Builder) !void {
         run_step.dependOn(&run_cmd.step);
     }
     
+    var tests_generator = b.addTest("generator.zig");
+    const test_step = b.step("test", "run all tests");
+    test_step.dependOn(&tests_generator.step);
+
 }

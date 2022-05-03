@@ -8,6 +8,155 @@ fn add_indent(out_buffer : anytype, indent: usize) !void {
     }
 }
 
+const BfOpEnum = enum {
+    push,
+    pop,
+    inc,
+    dec,
+    print,
+    input,
+    open_while,
+    close_while,
+    noop
+};
+
+const BfOp = union(BfOpEnum) {
+    push : usize,
+    pop : usize,
+    inc : usize,
+    dec : usize,
+    print,
+    input,
+    open_while,
+    close_while,
+    noop,
+};
+
+const Tokenizer = struct {
+    buffer : []const u8,
+    index : usize,
+
+    pub fn init(buffer : []const u8) Tokenizer {
+        return .{.buffer = buffer, .index = 0 };
+    }
+
+    fn count_same(self: *Tokenizer, char : u8) usize {
+        var count : usize = 0;
+        while (self.index < self.buffer.len) : (self.index += 1) {
+            if(self.buffer[self.index] == char) {
+                count += 1;
+            }
+            else {
+                break;
+            }
+        }
+        return count;
+    }
+
+    pub fn next(self: *Tokenizer) ?BfOp {
+        
+        if(self.index > self.buffer.len) {
+            return null;
+        }
+        
+        switch(self.buffer[self.index]) {
+            '>' => return BfOp{.push = self.count_same(self.buffer[self.index])},
+            '<' => return BfOp{.pop = self.count_same(self.buffer[self.index])},
+            '+' => return BfOp{.inc = self.count_same(self.buffer[self.index])},
+            '-' => return BfOp{.dec = self.count_same(self.buffer[self.index])},
+            '.' => {
+                self.index += 1;
+                return BfOp{.print = {}};
+            },
+            ',' => {
+                self.index += 1;
+                return BfOp{.input = {}};
+            },
+            '[' => {
+                self.index += 1;
+                return BfOp{.open_while = {}};
+            },
+            ']' => {
+                self.index += 1;
+                return BfOp{.close_while = {}};
+            },
+            else => {
+                self.index += 1;
+                return BfOp{.noop = {}};
+            }
+        }
+    }
+};
+
+const testing = std.testing;
+const expectEqual = testing.expectEqual;
+const hello_world = @embedFile("helloworld.bf");
+
+test "test tokenizer" {
+    var tokenizer = Tokenizer.init(hello_world[0..]);
+
+    try expectEqual(BfOp{.inc = 8}, tokenizer.next().?);
+    try expectEqual(BfOp{.open_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 4}, tokenizer.next().?);
+    try expectEqual(BfOp{.open_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.pop = 4}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.close_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.open_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.close_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.close_while = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 3}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 7}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 6}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.dec = 8}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{.inc = 2}, tokenizer.next().?);
+    try expectEqual(BfOp{.print = {}}, tokenizer.next().?);
+
+}
+
 pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
     const base = @embedFile("base.zig");
 
