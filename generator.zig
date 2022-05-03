@@ -172,22 +172,27 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
     var indent : usize = 4;
     var linebreak : u8 = '\n';
 
-    for(buffer) |char| {
-        try add_indent(out_buffer, indent);
-        switch(char) {
-            '>' => try out_buffer.appendSlice("state.push_data_pointer(1);"),
-            '<' => try out_buffer.appendSlice("state.pop_data_pointer(1);"),
-            '+' => try out_buffer.appendSlice("state.increment_current_data(1);"),
-            '-' => try out_buffer.appendSlice("state.decrement_current_data(1);"),
-            '.' => try out_buffer.appendSlice("try state.print_current_data();"),
-            ',' => try out_buffer.appendSlice("try state.input_char();"),
-            '[' => {
+    var tokenizer = Tokenizer.init(buffer);
+    var printer = [_]u8{0} ** 100;
+
+    while(tokenizer.next()) |result| {
+        if(result != BfOp.noop) {
+            try add_indent(out_buffer, indent);
+        }
+        switch (result) {
+            .push => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.push_data_pointer({});", .{count})),
+            .pop => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.pop_data_pointer({});", .{count})),
+            .inc => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.increment_current_data({});", .{count})),
+            .dec => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.decrement_current_data({});", .{count})),
+            .print => try out_buffer.appendSlice("try state.print_current_data();"),
+            .input => try out_buffer.appendSlice("try state.input_char();"),
+            .open_while => {
                 try out_buffer.append(linebreak);
                 try add_indent(out_buffer, indent);
-                try out_buffer.appendSlice("while(state.data[state.data_pointer] != 0) {");
+                try out_buffer.appendSlice("while(state.is_current_value_pointed_not_0()) {");
                 indent += 4;
             },
-            ']' => {
+            .close_while => {
                 indent -= 4;
                 var i : usize = 0;
                 while (i < 4) : (i+=1) {
@@ -200,6 +205,7 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
         }
         try out_buffer.append(linebreak);
     }
+
     try out_buffer.append('}');
     try out_buffer.append(linebreak);
 }

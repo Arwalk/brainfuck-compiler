@@ -25,6 +25,9 @@ const BrainfuckState = struct {
         try std.io.getStdOut().writer().print("{c}", .{self.data[self.data_pointer]});
     }
 
+    pub fn is_current_value_pointed_not_0(self: *BrainfuckState) bool {
+        return self.data[self.data_pointer] != 0;
+    }
 
     pub fn input_char(self: *BrainfuckState) !void {
         var reader = std.io.getStdIn().reader();
