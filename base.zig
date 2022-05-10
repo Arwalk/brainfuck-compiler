@@ -1,9 +1,7 @@
 const std = @import("std");
 
 const BrainfuckState = struct {
-    data : [std.math.maxInt(u16)]u8,
     data_pointer: [*]u8,
-
 
     pub fn push_data_pointer(self: *BrainfuckState, value : usize) void {
         self.data_pointer += value;
@@ -55,13 +53,10 @@ const BrainfuckState = struct {
         }
     }
 
-    pub fn init() BrainfuckState {
-        var temp = [1]u8{0};
+    pub fn init(data: [*]u8) BrainfuckState {
         var struc = BrainfuckState{
-            .data = [1]u8{0} ** 65535,
-            .data_pointer = &temp
+            .data_pointer = data
         };
-        struc.data_pointer = &struc.data;
 
         return struc;
     }

@@ -169,10 +169,16 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
 
     try out_buffer.appendSlice(base);
 
-    
+    try out_buffer.append(linebreak);
     try out_buffer.appendSlice("pub fn main() !void {");
     try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("    var state = BrainfuckState.init();");
+    try out_buffer.appendSlice("    var data : [std.math.maxInt(u16)]u8 = [1]u8{0} ** std.math.maxInt(u16);");
+    try out_buffer.append(linebreak);
+    try out_buffer.appendSlice("    var state = BrainfuckState.init(&data);");
+    try out_buffer.append(linebreak);
+    try out_buffer.append(linebreak);
+    try out_buffer.appendSlice("// program starts.");
+    try out_buffer.append(linebreak);
     try out_buffer.append(linebreak);
 
     var indent : usize = 4;
@@ -210,6 +216,12 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
         }
         try out_buffer.append(linebreak);
     }
+
+    try out_buffer.append(linebreak);
+    try out_buffer.appendSlice("// program ends");
+    try out_buffer.append(linebreak);
+    try out_buffer.append(linebreak);
+
 
     try out_buffer.append('}');
     try out_buffer.append(linebreak);
