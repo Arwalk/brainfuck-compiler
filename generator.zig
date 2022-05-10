@@ -43,11 +43,15 @@ const Tokenizer = struct {
     fn count_same(self: *Tokenizer, char : u8) usize {
         var count : usize = 0;
         while (self.index < self.buffer.len) : (self.index += 1) {
-            if(self.buffer[self.index] == char) {
+            const current_char = self.buffer[self.index];
+            if(current_char == char) {
                 count += 1;
             }
             else {
-                break;
+                switch(current_char) {
+                    '>', '<', '+', '-', '.', ',', '[', ']' => break,
+                    else => continue
+                }
             }
         }
         return count;
