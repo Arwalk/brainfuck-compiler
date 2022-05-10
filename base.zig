@@ -21,8 +21,8 @@ const BrainfuckState = struct {
         self.data_pointer[0] -%= value;
     }
 
-    pub fn print_current_data(self: *BrainfuckState) !void {
-        try std.io.getStdOut().writer().print("{c}", .{self.data_pointer[0]});
+    pub fn print_current_data(self: *BrainfuckState, count : usize) !void {
+        try std.io.getStdOut().writer().writeByteNTimes(self.data_pointer[0], count);
     }
 
     pub fn is_current_value_pointed_not_0(self: *BrainfuckState) bool {

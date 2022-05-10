@@ -25,7 +25,7 @@ const BfOp = union(BfOpEnum) {
     pop : usize,
     inc : usize,
     dec : usize,
-    print,
+    print : usize,
     input,
     open_while,
     close_while,
@@ -63,15 +63,14 @@ const Tokenizer = struct {
             return null;
         }
         
-        switch(self.buffer[self.index]) {
-            '>' => return BfOp{.push = self.count_same(self.buffer[self.index])},
-            '<' => return BfOp{.pop = self.count_same(self.buffer[self.index])},
-            '+' => return BfOp{.inc = self.count_same(self.buffer[self.index])},
-            '-' => return BfOp{.dec = self.count_same(self.buffer[self.index])},
-            '.' => {
-                self.index += 1;
-                return BfOp{.print = {}};
-            },
+        const current_char = self.buffer[self.index];
+
+        switch(current_char) {
+            '>' => return BfOp{.push = self.count_same(current_char)},
+            '<' => return BfOp{.pop = self.count_same(current_char)},
+            '+' => return BfOp{.inc = self.count_same(current_char)},
+            '-' => return BfOp{.dec = self.count_same(current_char)},
+            '.' => return BfOp{.print = self.count_same(current_char)},
             ',' => {
                 self.index += 1;
                 return BfOp{.input = {}};
@@ -190,7 +189,7 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
             .pop => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.pop_data_pointer({});", .{count})),
             .inc => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.increment_current_data({});", .{count})),
             .dec => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.decrement_current_data({});", .{count})),
-            .print => try out_buffer.appendSlice("try state.print_current_data();"),
+            .print => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "try state.print_current_data({});", .{count})),
             .input => try out_buffer.appendSlice("try state.input_char();"),
             .open_while => {
                 try out_buffer.append(linebreak);
