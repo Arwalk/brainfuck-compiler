@@ -28,7 +28,7 @@ pub fn build(b: *Builder) !void {
         var temp_file_name : []u8 = try std.fmt.allocPrint(gpa, "{s}.zig", .{file_name});
         var temp_file_full_path : []u8 = try std.fmt.allocPrint(gpa, "generated/{s}", .{temp_file_name});
 
-        var file_handle = try std.fs.cwd().openFile(path, .{ .read = true, .write = false });
+        var file_handle = try std.fs.cwd().openFile(path, .{ .mode=.read_only });
         defer file_handle.close();
 
         var buffer = try file_handle.readToEndAlloc(gpa, std.math.maxInt(u16));
@@ -38,7 +38,7 @@ pub fn build(b: *Builder) !void {
 
         var temp_file_handler = try std.fs.cwd().createFile(temp_file_full_path, .{});
         temp_file_handler.close();
-        temp_file_handler = try std.fs.cwd().openFile(temp_file_full_path, .{.read = false, .write = true});
+        temp_file_handler = try std.fs.cwd().openFile(temp_file_full_path, .{.mode = .write_only});
 
         try temp_file_handler.writeAll(out_buffer.items);
         temp_file_handler.close();
