@@ -1,31 +1,21 @@
 const std = @import("std");
 const Array = std.ArrayList;
 
-fn add_indent(out_buffer : anytype, indent: usize) !void {
-    var i : usize = 0;
-    while (i < indent) : (i+=1) {
+fn add_indent(out_buffer: anytype, indent: usize) !void {
+    var i: usize = 0;
+    while (i < indent) : (i += 1) {
         try out_buffer.append(' ');
     }
 }
 
-const BfOpEnum = enum {
-    push,
-    pop,
-    inc,
-    dec,
-    print,
-    input,
-    open_while,
-    close_while,
-    noop
-};
+const BfOpEnum = enum { push, pop, inc, dec, print, input, open_while, close_while, noop };
 
 const BfOp = union(BfOpEnum) {
-    push : usize,
-    pop : usize,
-    inc : usize,
-    dec : usize,
-    print : usize,
+    push: usize,
+    pop: usize,
+    inc: usize,
+    dec: usize,
+    print: usize,
     input,
     open_while,
     close_while,
@@ -33,24 +23,23 @@ const BfOp = union(BfOpEnum) {
 };
 
 const Tokenizer = struct {
-    buffer : []const u8,
-    index : usize,
+    buffer: []const u8,
+    index: usize,
 
-    pub fn init(buffer : []const u8) Tokenizer {
-        return .{.buffer = buffer, .index = 0 };
+    pub fn init(buffer: []const u8) Tokenizer {
+        return .{ .buffer = buffer, .index = 0 };
     }
 
-    fn count_same(self: *Tokenizer, char : u8) usize {
-        var count : usize = 0;
+    fn count_same(self: *Tokenizer, char: u8) usize {
+        var count: usize = 0;
         while (self.index < self.buffer.len) : (self.index += 1) {
             const current_char = self.buffer[self.index];
-            if(current_char == char) {
+            if (current_char == char) {
                 count += 1;
-            }
-            else {
-                switch(current_char) {
+            } else {
+                switch (current_char) {
                     '>', '<', '+', '-', '.', ',', '[', ']' => break,
-                    else => continue
+                    else => continue,
                 }
             }
         }
@@ -58,35 +47,34 @@ const Tokenizer = struct {
     }
 
     pub fn next(self: *Tokenizer) ?BfOp {
-        
-        if(self.index >= self.buffer.len) {
+        if (self.index >= self.buffer.len) {
             return null;
         }
-        
+
         const current_char = self.buffer[self.index];
 
-        switch(current_char) {
-            '>' => return BfOp{.push = self.count_same(current_char)},
-            '<' => return BfOp{.pop = self.count_same(current_char)},
-            '+' => return BfOp{.inc = self.count_same(current_char)},
-            '-' => return BfOp{.dec = self.count_same(current_char)},
-            '.' => return BfOp{.print = self.count_same(current_char)},
+        switch (current_char) {
+            '>' => return BfOp{ .push = self.count_same(current_char) },
+            '<' => return BfOp{ .pop = self.count_same(current_char) },
+            '+' => return BfOp{ .inc = self.count_same(current_char) },
+            '-' => return BfOp{ .dec = self.count_same(current_char) },
+            '.' => return BfOp{ .print = self.count_same(current_char) },
             ',' => {
                 self.index += 1;
-                return BfOp{.input = {}};
+                return BfOp{ .input = {} };
             },
             '[' => {
                 self.index += 1;
-                return BfOp{.open_while = {}};
+                return BfOp{ .open_while = {} };
             },
             ']' => {
                 self.index += 1;
-                return BfOp{.close_while = {}};
+                return BfOp{ .close_while = {} };
             },
             else => {
                 self.index += 1;
-                return BfOp{.noop = {}};
-            }
+                return BfOp{ .noop = {} };
+            },
         }
     }
 };
@@ -99,73 +87,72 @@ const hello_world = @embedFile("helloworld.bf");
 test "test tokenizer" {
     var tokenizer = Tokenizer.init(hello_world[0..]);
 
-    try expectEqual(BfOp{.inc = 8}, tokenizer.next().?);
-    try expectEqual(BfOp.open_while , tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 4}, tokenizer.next().?);
-    try expectEqual(BfOp.open_while , tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 2}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.pop = 4}, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 8 }, tokenizer.next().?);
+    try expectEqual(BfOp.open_while, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 4 }, tokenizer.next().?);
+    try expectEqual(BfOp.open_while, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 2 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .pop = 4 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
     try expectEqual(BfOp.close_while, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
-    try expectEqual(BfOp.open_while , tokenizer.next().?);
-    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp.open_while, tokenizer.next().?);
+    try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
     try expectEqual(BfOp.close_while, tokenizer.next().?);
-    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
+    try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
     try expectEqual(BfOp.close_while, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 3}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 7}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 1}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.pop = 1}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 3}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 6}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.dec = 8}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 2}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 1}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
-    try expectEqual(BfOp{.push = 1}, tokenizer.next().?);
-    try expectEqual(BfOp{.inc = 2}, tokenizer.next().?);
-    try expectEqual(BfOp.print, tokenizer.next().?);
+    try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .dec = 3 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .inc = 7 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .dec = 6 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .dec = 8 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
+    try expectEqual(BfOp{ .inc = 2 }, tokenizer.next().?);
+    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
     try expect(tokenizer.next() == null);
     try expect(tokenizer.next() == null);
-
 }
 
-pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
+pub fn generate(buffer: []u8, out_buffer: *Array(u8)) !void {
     const base = @embedFile("base.zig");
-    const linebreak : u8 = '\n';
+    const linebreak: u8 = '\n';
 
     try out_buffer.appendSlice(base);
 
@@ -181,13 +168,13 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
     try out_buffer.append(linebreak);
     try out_buffer.append(linebreak);
 
-    var indent : usize = 4;
+    var indent: usize = 4;
 
     var tokenizer = Tokenizer.init(buffer);
     var printer = [_]u8{0} ** 100;
 
-    while(tokenizer.next()) |result| {
-        if(result != BfOp.noop) {
+    while (tokenizer.next()) |result| {
+        if (result != BfOp.noop) {
             try add_indent(out_buffer, indent);
         }
         switch (result) {
@@ -205,14 +192,14 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
             },
             .close_while => {
                 indent -= 4;
-                var i : usize = 0;
-                while (i < 4) : (i+=1) {
+                var i: usize = 0;
+                while (i < 4) : (i += 1) {
                     _ = out_buffer.pop();
                 }
                 try out_buffer.appendSlice("}");
                 try out_buffer.append(linebreak);
             },
-            else => continue
+            else => continue,
         }
         try out_buffer.append(linebreak);
     }
@@ -221,7 +208,6 @@ pub fn generate(buffer : []u8, out_buffer : *Array(u8)) !void {
     try out_buffer.appendSlice("// program ends");
     try out_buffer.append(linebreak);
     try out_buffer.append(linebreak);
-
 
     try out_buffer.append('}');
     try out_buffer.append(linebreak);

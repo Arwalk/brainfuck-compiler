@@ -1,26 +1,29 @@
 const std = @import("std");
+const io = std.io;
+const stdout = std.io.getStdOut().writer();
+const stdin = std.io.getStdIn().reader();
 
 const BrainfuckState = struct {
     data_pointer: [*]u8,
 
-    pub fn push_data_pointer(self: *BrainfuckState, value : usize) void {
+    pub fn push_data_pointer(self: *BrainfuckState, value: usize) void {
         self.data_pointer += value;
     }
 
-    pub fn pop_data_pointer(self: *BrainfuckState, value : usize) void {
+    pub fn pop_data_pointer(self: *BrainfuckState, value: usize) void {
         self.data_pointer -= value;
     }
 
-    pub fn increment_current_data(self: *BrainfuckState, value : u8) void {
+    pub fn increment_current_data(self: *BrainfuckState, value: u8) void {
         self.data_pointer[0] +%= value;
     }
 
-    pub fn decrement_current_data(self: *BrainfuckState, value : u8) void {
+    pub fn decrement_current_data(self: *BrainfuckState, value: u8) void {
         self.data_pointer[0] -%= value;
     }
 
-    pub fn print_current_data(self: *BrainfuckState, count : usize) !void {
-        try std.io.getStdOut().writer().writeByteNTimes(self.data_pointer[0], count);
+    pub fn print_current_data(self: *BrainfuckState, count: usize) !void {
+        try stdout.writeByteNTimes(self.data_pointer[0], count);
     }
 
     pub fn is_current_value_pointed_not_0(self: *BrainfuckState) bool {
@@ -28,24 +31,21 @@ const BrainfuckState = struct {
     }
 
     pub fn input_char(self: *BrainfuckState) !void {
-        var reader = std.io.getStdIn().reader();
-        while(true) {
-            var readbuf : [2]u8 = .{0, 0};
-            if(reader.readUntilDelimiter(&readbuf, '\n')) |buf| {
-                try std.io.getStdOut().writer().print("ok.\n", .{});
-                if(buf.len == 0) {
+        while (true) {
+            var readbuf: [2]u8 = .{ 0, 0 };
+            if (stdin.readUntilDelimiter(&readbuf, '\n')) |buf| {
+                try stdout.print("ok.\n", .{});
+                if (buf.len == 0) {
                     self.data_pointer[0] = '\n';
-                }
-                else {
+                } else {
                     self.data_pointer[0] = buf[0];
                 }
                 break;
-                
             } else |_| {
-                try std.io.getStdOut().writer().print("Expecting only one character.\n", .{});
-                while(true) {
-                    var clearer = try reader.readUntilDelimiter(&readbuf, '\n');
-                    if(clearer.len == 0) {
+                try stdout.print("Expecting only one character.\n", .{});
+                while (true) {
+                    const clearer = try stdin.readUntilDelimiter(&readbuf, '\n');
+                    if (clearer.len == 0) {
                         break;
                     }
                 }
@@ -54,9 +54,7 @@ const BrainfuckState = struct {
     }
 
     pub fn init(data: [*]u8) BrainfuckState {
-        var struc = BrainfuckState{
-            .data_pointer = data
-        };
+        const struc = BrainfuckState{ .data_pointer = data };
 
         return struc;
     }
