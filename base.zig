@@ -30,6 +30,10 @@ const BrainfuckState = struct {
         return self.data_pointer[0] != 0;
     }
 
+    pub fn clear_current_cell(self: *BrainfuckState) void {
+        self.data_pointer[0] = 0;
+    }
+
     pub fn input_char(self: *BrainfuckState) !void {
         while (true) {
             var readbuf: [2]u8 = .{ 0, 0 };

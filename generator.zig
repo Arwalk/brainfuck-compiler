@@ -8,7 +8,7 @@ fn add_indent(out_buffer: anytype, indent: usize) !void {
     }
 }
 
-const BfOpEnum = enum { push, pop, inc, dec, print, input, open_while, close_while, noop };
+const BfOpEnum = enum { push, pop, inc, dec, print, input, open_while, close_while, clear, noop };
 
 const BfOp = union(BfOpEnum) {
     push: usize,
@@ -19,6 +19,7 @@ const BfOp = union(BfOpEnum) {
     input,
     open_while,
     close_while,
+    clear,
     noop,
 };
 
@@ -64,8 +65,13 @@ const Tokenizer = struct {
                 return BfOp{ .input = {} };
             },
             '[' => {
-                self.index += 1;
-                return BfOp{ .open_while = {} };
+                if ((self.buffer[self.index + 1] == '-' or self.buffer[self.index + 1] == '+') and self.buffer[self.index + 2] == ']') {
+                    self.index += 3;
+                    return BfOp{ .clear = {} };
+                } else {
+                    self.index += 1;
+                    return BfOp{ .open_while = {} };
+                }
             },
             ']' => {
                 self.index += 1;
@@ -198,6 +204,9 @@ pub fn generate(buffer: []u8, out_buffer: *Array(u8)) !void {
                 }
                 try out_buffer.appendSlice("}");
                 try out_buffer.append(linebreak);
+            },
+            .clear => {
+                try out_buffer.appendSlice("state.clear_current_cell();");
             },
             else => continue,
         }
