@@ -2,5 +2,7 @@ zig-cache/
 zig-out/
 generated/*
 *.bf
+# but keep the committed benchmark corpus
+!bench/*.bf
 .zig-cache/
 zig-out/

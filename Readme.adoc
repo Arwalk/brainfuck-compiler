@@ -8,6 +8,21 @@ As an example, `helloworld.bf` is available. On linux, just run `BF_FILE_PATH=./
 
 The generated zig file is available in the `generated` folder for reference.
 
+== Benchmarking
+
+`bench/bench.sh` compiles a brainfuck program and times the resulting binary:
+
+[source,sh]
+----
+bench/bench.sh                                  # default: bench/mandelbrot.bf, ReleaseFast
+bench/bench.sh bench/mandelbrot.bf Debug        # compare optimization levels
+bench/bench.sh bench/mandelbrot.bf ReleaseFast
+----
+
+The included `bench/mandelbrot.bf` (Erik Bosman's mandelbrot viewer) is a heavy,
+loop-dominated workload. When a `.sha256` file sits next to the program, the
+compiled binary's output is verified against it before timing.
+
 == Why ?
 
 Why not?
