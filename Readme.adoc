@@ -19,9 +19,15 @@ bench/bench.sh bench/mandelbrot.bf Debug        # compare optimization levels
 bench/bench.sh bench/mandelbrot.bf ReleaseFast
 ----
 
-The included `bench/mandelbrot.bf` (Erik Bosman's mandelbrot viewer) is a heavy,
-loop-dominated workload. When a `.sha256` file sits next to the program, the
-compiled binary's output is verified against it before timing.
+The corpus includes:
+
+* `bench/mandelbrot.bf` — Erik Bosman's mandelbrot viewer, a heavy, loop- and
+  arithmetic-dominated workload.
+* `bench/scan.bf` — a scan-dominated workload (`[>]` pointer scans), which the
+  compiler lowers to a vectorized byte search.
+
+When a `.sha256` file sits next to the program, the compiled binary's output is
+verified against it before timing.
 
 == Why ?
 

@@ -7,6 +7,19 @@ fn write_cell(writer: *Io.Writer, value: u8, count: usize) !void {
     try writer.splatByteAll(value, count);
 }
 
+/// `[>]`: move right to the nearest zero cell. Uses a vectorized byte search
+/// instead of stepping one cell at a time.
+fn scan_right(data: []u8, ptr: [*]u8) [*]u8 {
+    const idx = @intFromPtr(ptr) - @intFromPtr(data.ptr);
+    return ptr + std.mem.indexOfScalar(u8, data[idx..], 0).?;
+}
+
+/// `[<]`: move left to the nearest zero cell.
+fn scan_left(data: []u8, ptr: [*]u8) [*]u8 {
+    const idx = @intFromPtr(ptr) - @intFromPtr(data.ptr);
+    return data.ptr + std.mem.lastIndexOfScalar(u8, data[0 .. idx + 1], 0).?;
+}
+
 /// Reads a single byte for the brainfuck `,` command. Input is line-buffered:
 /// exactly one character per line is expected. Diagnostics go to stderr so they
 /// never pollute the program's own output on stdout.

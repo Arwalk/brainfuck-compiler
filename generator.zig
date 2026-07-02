@@ -9,18 +9,16 @@ const Allocator = std.mem.Allocator;
 // Compilation is split into passes rather than emitting text straight from the
 // token stream:
 //
-//   source ──parse──▶ []Prim ──lower──▶ []Node ──emit──▶ Zig source
+//   source ─parse─▶ []Prim ─lower─▶ []Node ─dce─▶ []Node ─emit─▶ Zig source
 //
 // `Prim` is the parsed program: runs of `+`/`-` and `>`/`<` are already merged
 // (and cancelled) into net deltas, and loops carry an explicit body.
 //
-// `Node` is the *optimized* program. `lower` performs two transformations:
-//   * offset folding: pointer moves inside a straight-line region are deferred,
-//     and every operation is tagged with its offset from the region's start, so
-//     `>>+<<` becomes a single `data[2] += 1` with no pointer traffic.
-//   * loop recognition: `[-]`-style clears become `set`, and balanced copy /
-//     multiply loops such as `[->++<]` become a `mul` (straight-line multiply
-//     add), turning an O(cell value) loop into O(1).
+// `Node` is the *optimized* program:
+//   * lower  — offset folding (defer pointer moves, tag ops with an offset) and
+//              loop recognition (clears, copy/multiply loops, pointer scans).
+//   * dce    — dead-code elimination (drop redundant clears and trailing
+//              effect-free work).
 
 /// A parsed primitive. `+`/`-` runs are merged into a signed `add`, `>`/`<`
 /// runs into a signed `move`, and `.` runs into a `print` count.
@@ -33,7 +31,7 @@ const Prim = union(enum) {
 };
 
 /// One destination of a recognized multiply loop:
-/// `cell[offset] += factor * cell[0]`.
+/// `cell[offset] += factor * <iteration count>`.
 const Target = struct { offset: isize, factor: u8 };
 
 /// An optimized operation. Offsets are relative to the current data pointer.
@@ -50,9 +48,14 @@ const Node = union(enum) {
     read: isize,
     /// `while (cell[0] != 0) { body }`
     loop: []const Node,
-    /// multiply-add: for each target `cell[t.offset] +%= t.factor *% cell[0]`,
-    /// then `cell[0] = 0`.
-    mul: []const Target,
+    /// copy/multiply loop: with iteration count `k` derived from `cell[0]`,
+    /// `cell[t.offset] +%= t.factor *% k` for each target, then `cell[0] = 0`.
+    /// `inv` is the modular inverse (mod 256) of the control cell's per-pass
+    /// delta; `inv == 255` is the common decrement-by-one case where `k == cell[0]`.
+    mul: struct { inv: u8, targets: []const Target },
+    /// pointer scan `[>]` / `[<]`: `while (cell[0] != 0) ptr += stride`, with
+    /// `stride` either +1 or -1.
+    scan: isize,
 };
 
 // ============================================================================
@@ -187,17 +190,38 @@ fn lower(allocator: Allocator, prims: []const Prim) Allocator.Error![]Node {
     return out.toOwnedSlice(allocator);
 }
 
+/// Inverse of an odd byte modulo 256 (exists for every odd value).
+fn modInverse256(a: u8) u8 {
+    var x: u16 = 1;
+    while (x < 256) : (x += 1) {
+        if ((@as(u16, a) *% x) & 0xff == 1) return @intCast(x);
+    }
+    unreachable; // only called with odd `a`
+}
+
 /// Try to replace a loop body with straight-line code.
 ///
-/// A body qualifies when it is a balanced (net pointer move 0), side-effect-free
-/// run of additions — no I/O, no nested loops. Given the net delta `d0` applied
-/// to the control cell (offset 0):
-///   * with no other cells touched and `d0` odd, the loop is a clear → `set 0`
-///     (odd deltas are invertible mod 256, so the cell is guaranteed to reach 0);
-///   * with `d0 == -1` and other cells touched, it is a copy/multiply loop → a
-///     `mul` node.
+///   * `[>]` / `[<]` (a lone ±1 move) → `scan`.
+///   * a balanced, side-effect-free run of additions (no I/O, no nested loops)
+///     whose control cell (offset 0) has an *odd* net delta:
+///       - no other cells touched → `set 0` (a clear);
+///       - other cells touched     → `mul` (a copy/multiply loop).
+///     An odd delta is invertible mod 256, so the loop is guaranteed to reach 0
+///     and its iteration count is a fixed function of the control cell.
+///
 /// Anything else is left as a real loop.
 fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
+    // Pointer scan: `while (cell[0] != 0) ptr += stride`.
+    if (body.len == 1 and body[0] == .move) {
+        const stride = body[0].move;
+        if (stride == 1 or stride == -1) {
+            const result = try allocator.alloc(Node, 1);
+            result[0] = .{ .scan = stride };
+            return result;
+        }
+        return null; // wider strides stay real loops
+    }
+
     for (body) |node| {
         if (node != .add) return null; // I/O, moves (unbalanced), or nested loops
     }
@@ -230,23 +254,103 @@ fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
         }
     }
 
+    // An even control delta may never reach 0 (potential infinite loop), so it
+    // is not a clear/multiply loop.
+    if (d0 & 1 == 0) return null;
+
+    const result = try allocator.alloc(Node, 1);
     if (targets.items.len == 0) {
-        if (@mod(d0, 2) == 1) {
-            const result = try allocator.alloc(Node, 1);
-            result[0] = .{ .set = .{ .offset = 0, .value = 0 } };
-            return result;
+        result[0] = .{ .set = .{ .offset = 0, .value = 0 } };
+    } else {
+        result[0] = .{ .mul = .{ .inv = modInverse256(@intCast(d0)), .targets = try targets.toOwnedSlice(allocator) } };
+    }
+    return result;
+}
+
+// ============================================================================
+// Dead-code elimination: []Node -> []Node
+// ============================================================================
+
+fn setContains(items: []const isize, off: isize) bool {
+    for (items) |o| if (o == off) return true;
+    return false;
+}
+
+fn setRemove(list: *Array(isize), off: isize) void {
+    var i: usize = 0;
+    while (i < list.items.len) {
+        if (list.items[i] == off) _ = list.swapRemove(i) else i += 1;
+    }
+}
+
+fn setAdd(allocator: Allocator, list: *Array(isize), off: isize) !void {
+    if (!setContains(list.items, off)) try list.append(allocator, off);
+}
+
+/// Remove work that cannot affect the program's output:
+///   * a clear (`set 0`) of a cell already known to be zero — cells are known
+///     zero after another clear, after a `mul`, and after any loop/scan (which
+///     exit with the current cell == 0);
+///   * at the top level, a trailing run of effect-free, always-terminating ops
+///     (add/set/move/mul) after the final observable operation.
+fn eliminateDeadCode(allocator: Allocator, nodes: []const Node, top: bool) Allocator.Error![]Node {
+    var out: Array(Node) = .empty;
+    var zeros: Array(isize) = .empty; // offsets currently known to hold zero
+
+    for (nodes) |node| {
+        switch (node) {
+            .set => |s| {
+                if (s.value == 0) {
+                    if (setContains(zeros.items, s.offset)) continue; // redundant clear
+                    try out.append(allocator, node);
+                    try setAdd(allocator, &zeros, s.offset);
+                } else {
+                    try out.append(allocator, node);
+                    setRemove(&zeros, s.offset);
+                }
+            },
+            .add => |a| {
+                try out.append(allocator, node);
+                setRemove(&zeros, a.offset);
+            },
+            .read => |off| {
+                try out.append(allocator, node);
+                setRemove(&zeros, off);
+            },
+            .print => try out.append(allocator, node),
+            .move => {
+                try out.append(allocator, node);
+                zeros.clearRetainingCapacity(); // frame shifted; known zeros no longer apply
+            },
+            .mul => |m| {
+                try out.append(allocator, node);
+                for (m.targets) |t| setRemove(&zeros, t.offset);
+                try setAdd(allocator, &zeros, 0); // control cell cleared
+            },
+            .scan => {
+                try out.append(allocator, node);
+                zeros.clearRetainingCapacity();
+                try setAdd(allocator, &zeros, 0); // scan exits on a zero cell
+            },
+            .loop => |body| {
+                const cleaned = try eliminateDeadCode(allocator, body, false);
+                try out.append(allocator, .{ .loop = cleaned });
+                zeros.clearRetainingCapacity();
+                try setAdd(allocator, &zeros, 0); // loop exits with cell[0] == 0
+            },
         }
-        return null;
     }
 
-    // `d0 == 255` is -1 mod 256: the control cell decrements by one each pass,
-    // so the loop runs exactly cell[0] times.
-    if (d0 == 255) {
-        const result = try allocator.alloc(Node, 1);
-        result[0] = .{ .mul = try targets.toOwnedSlice(allocator) };
-        return result;
+    var result = try out.toOwnedSlice(allocator);
+    if (top) {
+        var end = result.len;
+        while (end > 0) switch (result[end - 1]) {
+            .add, .set, .move, .mul => end -= 1,
+            else => break, // print/read are observable; loop/scan may not terminate
+        };
+        result = result[0..end];
     }
-    return null;
+    return result;
 }
 
 // ============================================================================
@@ -298,15 +402,27 @@ fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usiz
                 try emit(allocator, out, body, indent + 1);
                 try emitLine(allocator, out, indent, "}");
             },
-            .mul => |targets| {
+            .mul => |m| {
+                // `k` is the loop's iteration count. For the decrement-by-one
+                // case (inv == 255) that is just the control cell's value.
+                const count_expr = if (m.inv == 255)
+                    "ptr[0]"
+                else
+                    try std.fmt.allocPrint(allocator, "(0 -% ptr[0]) *% {d}", .{m.inv});
                 try emitLine(allocator, out, indent, "{");
-                try emitLine(allocator, out, indent + 1, "const n = ptr[0];");
-                for (targets) |t| {
+                try emitLine(allocator, out, indent + 1, try std.fmt.allocPrint(allocator, "const k = {s};", .{count_expr}));
+                for (m.targets) |t| {
                     const cell = try cellExpr(allocator, t.offset);
-                    try emitLine(allocator, out, indent + 1, try std.fmt.allocPrint(allocator, "{s} +%= {d} *% n;", .{ cell, t.factor }));
+                    try emitLine(allocator, out, indent + 1, try std.fmt.allocPrint(allocator, "{s} +%= {d} *% k;", .{ cell, t.factor }));
                 }
                 try emitLine(allocator, out, indent + 1, "ptr[0] = 0;");
                 try emitLine(allocator, out, indent, "}");
+            },
+            .scan => |stride| {
+                if (stride == 1)
+                    try emitLine(allocator, out, indent, "ptr = scan_right(&data, ptr);")
+                else
+                    try emitLine(allocator, out, indent, "ptr = scan_left(&data, ptr);");
             },
         }
     }
@@ -327,7 +443,7 @@ pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8)) !voi
     try out_buffer.append(allocator, '\n');
 
     const prims = try parse(allocator, buffer);
-    const nodes = try lower(allocator, prims);
+    const nodes = try eliminateDeadCode(allocator, try lower(allocator, prims), true);
 
     try out_buffer.appendSlice(allocator,
         \\pub fn main(init: std.process.Init) !void {
@@ -353,7 +469,7 @@ pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8)) !voi
         \\    // program starts
         \\
     );
-    // Keep `ptr` live even when the program is empty (no operations reference it).
+    // Keep `ptr`/`data` live even when the program is empty.
     if (nodes.len == 0) try out_buffer.appendSlice(allocator, "    _ = &ptr;\n");
 
     try emit(allocator, out_buffer, nodes, 1);
@@ -379,6 +495,10 @@ fn parseSource(allocator: Allocator, src: []const u8) ![]const Prim {
 
 fn lowerSource(allocator: Allocator, src: []const u8) ![]Node {
     return lower(allocator, try parse(allocator, src));
+}
+
+fn optimizeSource(allocator: Allocator, src: []const u8) ![]Node {
+    return eliminateDeadCode(allocator, try lowerSource(allocator, src), true);
 }
 
 fn containsMul(nodes: []const Node) bool {
@@ -429,6 +549,8 @@ test "recognize clear loops" {
     try testing.expectEqualDeep(expected, try lowerSource(a, "[-]"));
     try testing.expectEqualDeep(expected, try lowerSource(a, "[+]"));
     try testing.expectEqualDeep(expected, try lowerSource(a, "[--- ]")); // odd delta still clears
+    // even delta is not a guaranteed clear -> stays a loop
+    try testing.expect(std.meta.activeTag((try lowerSource(a, "[--]"))[0]) == .loop);
 }
 
 test "recognize multiply / copy loops" {
@@ -436,26 +558,64 @@ test "recognize multiply / copy loops" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    // Copy current cell into the next one.
+    // Copy current cell into the next one (decrement-by-one -> inv 255).
     try testing.expectEqualDeep(@as([]const Node, &.{
-        .{ .mul = &.{.{ .offset = 1, .factor = 1 }} },
+        .{ .mul = .{ .inv = 255, .targets = &.{.{ .offset = 1, .factor = 1 }} } },
     }), try lowerSource(a, "[->+<]"));
 
-    // Multiply-add into two cells: cell[1] += 2*n, cell[2] += 3*n.
+    // Multiply-add into two cells.
     try testing.expectEqualDeep(@as([]const Node, &.{
-        .{ .mul = &.{ .{ .offset = 1, .factor = 2 }, .{ .offset = 2, .factor = 3 } } },
+        .{ .mul = .{ .inv = 255, .targets = &.{ .{ .offset = 1, .factor = 2 }, .{ .offset = 2, .factor = 3 } } } },
     }), try lowerSource(a, "[->++>+++<<]"));
+
+    // Generalized: control cell decremented by 3 -> inverse of 3 mod 256 is 171,
+    // and inv(253) == 85.
+    try testing.expectEqualDeep(@as([]const Node, &.{
+        .{ .mul = .{ .inv = 85, .targets = &.{.{ .offset = 1, .factor = 1 }} } },
+    }), try lowerSource(a, "[--->+<]"));
 }
 
-test "unbalanced loops are not treated as multiply loops" {
+test "recognize pointer scans" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    // A scan loop `[<]` must stay a real loop with a trailing move in its body.
+    try testing.expectEqualDeep(@as([]const Node, &.{.{ .scan = 1 }}), try lowerSource(a, "[>]"));
+    try testing.expectEqualDeep(@as([]const Node, &.{.{ .scan = -1 }}), try lowerSource(a, "[<]"));
+    // Wider strides are not vectorizable scans; keep them as real loops.
+    try testing.expect(std.meta.activeTag((try lowerSource(a, "[>>]"))[0]) == .loop);
+}
+
+test "dead code elimination drops redundant clears" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // The second clear of the same cell (print doesn't touch it) is redundant.
     try testing.expectEqualDeep(@as([]const Node, &.{
-        .{ .loop = &.{.{ .move = -1 }} },
-    }), try lowerSource(a, "[<]"));
+        .{ .set = .{ .offset = 0, .value = 0 } },
+        .{ .print = .{ .offset = 0, .count = 1 } },
+    }), try optimizeSource(a, "[-].[-]"));
+
+    // A multiply loop already zeroes the control cell, so a following clear goes.
+    try testing.expectEqualDeep(@as([]const Node, &.{
+        .{ .mul = .{ .inv = 255, .targets = &.{.{ .offset = 1, .factor = 1 }} } },
+        .{ .print = .{ .offset = 0, .count = 1 } },
+    }), try optimizeSource(a, "[->+<][-]."));
+}
+
+test "dead code elimination trims trailing effect-free work" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Everything after the last print is unobservable.
+    try testing.expectEqualDeep(@as([]const Node, &.{
+        .{ .print = .{ .offset = 0, .count = 1 } },
+    }), try optimizeSource(a, ".>+++<--"));
+
+    // A program with no output at all optimizes away entirely.
+    try testing.expectEqual(@as(usize, 0), (try optimizeSource(a, "+++>++[-]<")).len);
 }
 
 test "helloworld exercises the multiply optimization" {
@@ -464,6 +624,6 @@ test "helloworld exercises the multiply optimization" {
     const a = arena.allocator();
 
     const hello_world = @embedFile("helloworld.bf");
-    const nodes = try lowerSource(a, hello_world);
+    const nodes = try optimizeSource(a, hello_world);
     try testing.expect(containsMul(nodes));
 }
