@@ -1,10 +1,10 @@
 const std = @import("std");
-const io = std.io;
-const stdout = std.io.getStdOut().writer();
-const stdin = std.io.getStdIn().reader();
+const Io = std.Io;
 
 const BrainfuckState = struct {
     data_pointer: [*]u8,
+    writer: *Io.Writer,
+    reader: *Io.Reader,
 
     pub fn push_data_pointer(self: *BrainfuckState, value: usize) void {
         self.data_pointer += value;
@@ -23,7 +23,7 @@ const BrainfuckState = struct {
     }
 
     pub fn print_current_data(self: *BrainfuckState, count: usize) !void {
-        try stdout.writeByteNTimes(self.data_pointer[0], count);
+        try self.writer.splatByteAll(self.data_pointer[0], count);
     }
 
     pub fn is_current_value_pointed_not_0(self: *BrainfuckState) bool {
@@ -36,30 +36,31 @@ const BrainfuckState = struct {
 
     pub fn input_char(self: *BrainfuckState) !void {
         while (true) {
-            var readbuf: [2]u8 = .{ 0, 0 };
-            if (stdin.readUntilDelimiter(&readbuf, '\n')) |buf| {
-                try stdout.print("ok.\n", .{});
-                if (buf.len == 0) {
-                    self.data_pointer[0] = '\n';
-                } else {
-                    self.data_pointer[0] = buf[0];
-                }
-                break;
-            } else |_| {
-                try stdout.print("Expecting only one character.\n", .{});
-                while (true) {
-                    const clearer = try stdin.readUntilDelimiter(&readbuf, '\n');
-                    if (clearer.len == 0) {
-                        break;
-                    }
-                }
+            const line = self.reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
+                error.StreamTooLong => {
+                    // Diagnostics go to stderr so they never pollute the
+                    // program's own output on stdout.
+                    std.debug.print("Expecting only one character.\n", .{});
+                    _ = self.reader.discardDelimiterInclusive('\n') catch {};
+                    continue;
+                },
+                else => return err,
+            };
+
+            // `line` still contains the trailing '\n'; drop it before inspecting.
+            const content = line[0 .. line.len - 1];
+            if (content.len > 1) {
+                std.debug.print("Expecting only one character.\n", .{});
+                continue;
             }
+
+            std.debug.print("ok.\n", .{});
+            self.data_pointer[0] = if (content.len == 0) '\n' else content[0];
+            break;
         }
     }
 
-    pub fn init(data: [*]u8) BrainfuckState {
-        const struc = BrainfuckState{ .data_pointer = data };
-
-        return struc;
+    pub fn init(data: [*]u8, writer: *Io.Writer, reader: *Io.Reader) BrainfuckState {
+        return BrainfuckState{ .data_pointer = data, .writer = writer, .reader = reader };
     }
 };

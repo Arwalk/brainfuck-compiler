@@ -1,10 +1,10 @@
 const std = @import("std");
 const Array = std.ArrayList;
 
-fn add_indent(out_buffer: anytype, indent: usize) !void {
+fn add_indent(out_buffer: anytype, allocator: std.mem.Allocator, indent: usize) !void {
     var i: usize = 0;
     while (i < indent) : (i += 1) {
-        try out_buffer.append(' ');
+        try out_buffer.append(allocator, ' ');
     }
 }
 
@@ -65,7 +65,13 @@ const Tokenizer = struct {
                 return BfOp{ .input = {} };
             },
             '[' => {
-                if ((self.buffer[self.index + 1] == '-' or self.buffer[self.index + 1] == '+') and self.buffer[self.index + 2] == ']') {
+                // `[-]` / `[+]` clears the current cell. Only probe the two
+                // following bytes when they are actually in bounds, otherwise a
+                // `[` near the end of the buffer would read past it.
+                if (self.index + 2 < self.buffer.len and
+                    (self.buffer[self.index + 1] == '-' or self.buffer[self.index + 1] == '+') and
+                    self.buffer[self.index + 2] == ']')
+                {
                     self.index += 3;
                     return BfOp{ .clear = {} };
                 } else {
@@ -124,55 +130,65 @@ test "test tokenizer" {
     try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
     try expectEqual(BfOp.close_while, tokenizer.next().?);
     try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
     try expectEqual(BfOp{ .dec = 3 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .inc = 7 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    // `..` in the source is merged by `count_same` into a single print op.
+    try expectEqual(BfOp{ .print = 2 }, tokenizer.next().?);
     try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
     try expectEqual(BfOp{ .dec = 1 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .pop = 1 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .inc = 3 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .dec = 6 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .dec = 8 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .push = 2 }, tokenizer.next().?);
     try expectEqual(BfOp{ .inc = 1 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expectEqual(BfOp{ .push = 1 }, tokenizer.next().?);
     try expectEqual(BfOp{ .inc = 2 }, tokenizer.next().?);
-    try expect(@TypeOf(tokenizer.next().?) == @TypeOf(BfOp.print));
+    try expect(tokenizer.next().? == .print);
     try expect(tokenizer.next() == null);
     try expect(tokenizer.next() == null);
 }
 
-pub fn generate(buffer: []u8, out_buffer: *Array(u8)) !void {
+pub fn generate(allocator: std.mem.Allocator, buffer: []u8, out_buffer: *Array(u8)) !void {
     const base = @embedFile("base.zig");
     const linebreak: u8 = '\n';
 
-    try out_buffer.appendSlice(base);
+    try out_buffer.appendSlice(allocator, base);
 
-    try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("pub fn main() !void {");
-    try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("    var data : [std.math.maxInt(u16)]u8 = [1]u8{0} ** std.math.maxInt(u16);");
-    try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("    var state = BrainfuckState.init(&data);");
-    try out_buffer.append(linebreak);
-    try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("// program starts.");
-    try out_buffer.append(linebreak);
-    try out_buffer.append(linebreak);
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.appendSlice(allocator,
+        \\pub fn main(init: std.process.Init) !void {
+        \\    const io = init.io;
+        \\
+        \\    var stdout_buffer: [4096]u8 = undefined;
+        \\    var stdout_writer = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
+        \\    const out = &stdout_writer.interface;
+        \\
+        \\    var stdin_buffer: [4096]u8 = undefined;
+        \\    var stdin_reader = std.Io.File.Reader.init(.stdin(), io, &stdin_buffer);
+        \\    const in = &stdin_reader.interface;
+        \\
+        \\    var data : [std.math.maxInt(u16)]u8 = [1]u8{0} ** std.math.maxInt(u16);
+        \\    var state = BrainfuckState.init(&data, out, in);
+    );
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.appendSlice(allocator, "// program starts.");
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.append(allocator, linebreak);
 
     var indent: usize = 4;
 
@@ -181,19 +197,21 @@ pub fn generate(buffer: []u8, out_buffer: *Array(u8)) !void {
 
     while (tokenizer.next()) |result| {
         if (result != BfOp.noop) {
-            try add_indent(out_buffer, indent);
+            try add_indent(out_buffer, allocator, indent);
         }
         switch (result) {
-            .push => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.push_data_pointer({});", .{count})),
-            .pop => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.pop_data_pointer({});", .{count})),
-            .inc => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.increment_current_data({});", .{count})),
-            .dec => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "state.decrement_current_data({});", .{count})),
-            .print => |count| try out_buffer.appendSlice(try std.fmt.bufPrint(&printer, "try state.print_current_data({});", .{count})),
-            .input => try out_buffer.appendSlice("try state.input_char();"),
+            .push => |count| try out_buffer.appendSlice(allocator, try std.fmt.bufPrint(&printer, "state.push_data_pointer({});", .{count})),
+            .pop => |count| try out_buffer.appendSlice(allocator, try std.fmt.bufPrint(&printer, "state.pop_data_pointer({});", .{count})),
+            // The cell is a u8, so a run of N increments is equivalent to N % 256.
+            // Reducing here also keeps the emitted literal within the u8 parameter.
+            .inc => |count| try out_buffer.appendSlice(allocator, try std.fmt.bufPrint(&printer, "state.increment_current_data({});", .{count % 256})),
+            .dec => |count| try out_buffer.appendSlice(allocator, try std.fmt.bufPrint(&printer, "state.decrement_current_data({});", .{count % 256})),
+            .print => |count| try out_buffer.appendSlice(allocator, try std.fmt.bufPrint(&printer, "try state.print_current_data({});", .{count})),
+            .input => try out_buffer.appendSlice(allocator, "try state.input_char();"),
             .open_while => {
-                try out_buffer.append(linebreak);
-                try add_indent(out_buffer, indent);
-                try out_buffer.appendSlice("while(state.is_current_value_pointed_not_0()) {");
+                try out_buffer.append(allocator, linebreak);
+                try add_indent(out_buffer, allocator, indent);
+                try out_buffer.appendSlice(allocator, "while(state.is_current_value_pointed_not_0()) {");
                 indent += 4;
             },
             .close_while => {
@@ -202,22 +220,24 @@ pub fn generate(buffer: []u8, out_buffer: *Array(u8)) !void {
                 while (i < 4) : (i += 1) {
                     _ = out_buffer.pop();
                 }
-                try out_buffer.appendSlice("}");
-                try out_buffer.append(linebreak);
+                try out_buffer.appendSlice(allocator, "}");
+                try out_buffer.append(allocator, linebreak);
             },
             .clear => {
-                try out_buffer.appendSlice("state.clear_current_cell();");
+                try out_buffer.appendSlice(allocator, "state.clear_current_cell();");
             },
             else => continue,
         }
-        try out_buffer.append(linebreak);
+        try out_buffer.append(allocator, linebreak);
     }
 
-    try out_buffer.append(linebreak);
-    try out_buffer.appendSlice("// program ends");
-    try out_buffer.append(linebreak);
-    try out_buffer.append(linebreak);
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.appendSlice(allocator, "// program ends");
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.append(allocator, linebreak);
 
-    try out_buffer.append('}');
-    try out_buffer.append(linebreak);
+    try out_buffer.appendSlice(allocator, "    try out.flush();");
+    try out_buffer.append(allocator, linebreak);
+    try out_buffer.append(allocator, '}');
+    try out_buffer.append(allocator, linebreak);
 }
