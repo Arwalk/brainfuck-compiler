@@ -8,6 +8,21 @@ As an example, `helloworld.bf` is available. On linux, just run `BF_FILE_PATH=./
 
 The generated zig file is available in the `generated` folder for reference.
 
+== Options
+
+The generated program can be tuned with build options:
+
+[source,sh]
+----
+BF_FILE_PATH=./helloworld.bf zig build -Doptimize=ReleaseFast \
+  -Dcell-bits=16 \      # cell width: 8 (default), 16, or 32
+  -Dtape-size=30000 \   # number of cells (default 65535)
+  -Dstdout-buffer=65536 # stdout buffer in bytes (default 65536)
+----
+
+`cell-bits` changes the arithmetic modulus of every cell (all wrapping is done
+modulo `2^cell-bits`); `.` always writes the low 8 bits.
+
 == Benchmarking
 
 `bench/bench.sh` compiles a brainfuck program and times the resulting binary:

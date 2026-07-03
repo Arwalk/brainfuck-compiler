@@ -7,17 +7,17 @@ fn write_cell(writer: *Io.Writer, value: u8, count: usize) !void {
     try writer.splatByteAll(value, count);
 }
 
-/// `[>]`: move right to the nearest zero cell. Uses a vectorized byte search
+/// `[>]`: move right to the nearest zero cell. Uses a vectorized element search
 /// instead of stepping one cell at a time.
-fn scan_right(data: []u8, ptr: [*]u8) [*]u8 {
-    const idx = @intFromPtr(ptr) - @intFromPtr(data.ptr);
-    return ptr + std.mem.indexOfScalar(u8, data[idx..], 0).?;
+fn scan_right(comptime T: type, data: []T, ptr: [*]T) [*]T {
+    const idx = (@intFromPtr(ptr) - @intFromPtr(data.ptr)) / @sizeOf(T);
+    return ptr + std.mem.indexOfScalar(T, data[idx..], 0).?;
 }
 
 /// `[<]`: move left to the nearest zero cell.
-fn scan_left(data: []u8, ptr: [*]u8) [*]u8 {
-    const idx = @intFromPtr(ptr) - @intFromPtr(data.ptr);
-    return data.ptr + std.mem.lastIndexOfScalar(u8, data[0 .. idx + 1], 0).?;
+fn scan_left(comptime T: type, data: []T, ptr: [*]T) [*]T {
+    const idx = (@intFromPtr(ptr) - @intFromPtr(data.ptr)) / @sizeOf(T);
+    return data.ptr + std.mem.lastIndexOfScalar(T, data[0 .. idx + 1], 0).?;
 }
 
 /// Reads a single byte for the brainfuck `,` command. Input is line-buffered:

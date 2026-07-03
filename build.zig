@@ -18,6 +18,18 @@ pub fn build(b: *Build) !void {
     const gpa = b.allocator;
     const io = b.graph.io;
 
+    // Generated-program knobs.
+    const cell_bits = b.option(u16, "cell-bits", "Cell width in bits: 8, 16, or 32 (default 8)") orelse 8;
+    switch (cell_bits) {
+        8, 16, 32 => {},
+        else => std.debug.panic("cell-bits must be 8, 16, or 32, got {d}", .{cell_bits}),
+    }
+    const config: generator.Config = .{
+        .cell_bits = cell_bits,
+        .tape_size = b.option(usize, "tape-size", "Number of cells in the tape (default 65535)") orelse std.math.maxInt(u16),
+        .stdout_buffer = b.option(usize, "stdout-buffer", "Stdout buffer size in bytes (default 65536)") orelse 64 * 1024,
+    };
+
     if (b.graph.environ_map.get("BF_FILE_PATH")) |path| {
         const file_name = std.fs.path.basename(path);
         const temp_file_full_path = try std.fmt.allocPrint(gpa, "generated/{s}.zig", .{file_name});
@@ -25,7 +37,7 @@ pub fn build(b: *Build) !void {
         const buffer = try b.build_root.handle.readFileAlloc(io, path, gpa, .unlimited);
 
         var out_buffer: std.ArrayList(u8) = .empty;
-        try generator.generate(gpa, buffer, &out_buffer);
+        try generator.generate(gpa, buffer, &out_buffer, config);
 
         try b.build_root.handle.writeFile(io, .{
             .sub_path = temp_file_full_path,

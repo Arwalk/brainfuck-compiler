@@ -3,6 +3,32 @@ const Array = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 // ============================================================================
+// Configuration
+// ============================================================================
+
+/// Build-time knobs for the generated program. `cell_bits` selects the tape
+/// element width (and therefore the modulus of all cell arithmetic).
+pub const Config = struct {
+    cell_bits: u16 = 8,
+    tape_size: usize = std.math.maxInt(u16),
+    stdout_buffer: usize = 64 * 1024,
+
+    /// 2^cell_bits — the modulus every cell operation wraps around.
+    pub fn modulus(self: Config) u64 {
+        return @as(u64, 1) << @intCast(self.cell_bits);
+    }
+
+    pub fn cellType(self: Config) []const u8 {
+        return switch (self.cell_bits) {
+            8 => "u8",
+            16 => "u16",
+            32 => "u32",
+            else => unreachable, // validated by the build script
+        };
+    }
+};
+
+// ============================================================================
 // Intermediate representation
 // ============================================================================
 //
@@ -23,7 +49,7 @@ const Allocator = std.mem.Allocator;
 /// A parsed primitive. `+`/`-` runs are merged into a signed `add`, `>`/`<`
 /// runs into a signed `move`, and `.` runs into a `print` count.
 const Prim = union(enum) {
-    add: i32,
+    add: i64,
     move: isize,
     print: usize,
     read,
@@ -32,14 +58,16 @@ const Prim = union(enum) {
 
 /// One destination of a recognized multiply loop:
 /// `cell[offset] += factor * <iteration count>`.
-const Target = struct { offset: isize, factor: u8 };
+const Target = struct { offset: isize, factor: u32 };
 
 /// An optimized operation. Offsets are relative to the current data pointer.
+/// Cell constants are stored in a `u32` (wide enough for any supported cell
+/// width) already reduced modulo the cell modulus.
 const Node = union(enum) {
     /// `cell[offset] +%= value`
-    add: struct { offset: isize, value: u8 },
+    add: struct { offset: isize, value: u32 },
     /// `cell[offset] = value`
-    set: struct { offset: isize, value: u8 },
+    set: struct { offset: isize, value: u32 },
     /// `ptr += delta`
     move: isize,
     /// print `cell[offset]`, `count` times
@@ -50,9 +78,9 @@ const Node = union(enum) {
     loop: []const Node,
     /// copy/multiply loop: with iteration count `k` derived from `cell[0]`,
     /// `cell[t.offset] +%= t.factor *% k` for each target, then `cell[0] = 0`.
-    /// `inv` is the modular inverse (mod 256) of the control cell's per-pass
-    /// delta; `inv == 255` is the common decrement-by-one case where `k == cell[0]`.
-    mul: struct { inv: u8, targets: []const Target },
+    /// `inv` is the modular inverse of the control cell's per-pass delta;
+    /// `inv == modulus-1` is the common decrement-by-one case where `k == cell[0]`.
+    mul: struct { inv: u32, targets: []const Target },
     /// pointer scan `[>]` / `[<]`: `while (cell[0] != 0) ptr += stride`, with
     /// `stride` either +1 or -1.
     scan: isize,
@@ -69,8 +97,8 @@ const Parser = struct {
 
     /// Sum a run of `+`/`-` into a net delta, skipping (and looking through)
     /// non-command characters, stopping at the next command.
-    fn readAddRun(self: *Parser) i32 {
-        var net: i32 = 0;
+    fn readAddRun(self: *Parser) i64 {
+        var net: i64 = 0;
         while (self.index < self.buffer.len) : (self.index += 1) {
             switch (self.buffer[self.index]) {
                 '+' => net += 1,
@@ -153,7 +181,8 @@ fn parse(allocator: Allocator, buffer: []const u8) ![]const Prim {
 // Lowering: []Prim -> []Node  (offset folding + loop recognition)
 // ============================================================================
 
-fn lower(allocator: Allocator, prims: []const Prim) Allocator.Error![]Node {
+fn lower(allocator: Allocator, prims: []const Prim, cfg: Config) Allocator.Error![]Node {
+    const m: i64 = @intCast(cfg.modulus());
     var out: Array(Node) = .empty;
     // `cursor` is the offset of the "current cell" relative to the actual data
     // pointer. Pointer moves only adjust this bookkeeping value; a real `move`
@@ -163,7 +192,7 @@ fn lower(allocator: Allocator, prims: []const Prim) Allocator.Error![]Node {
     for (prims) |prim| {
         switch (prim) {
             .add => |v| {
-                const value: u8 = @intCast(@mod(v, 256));
+                const value: u32 = @intCast(@mod(v, m));
                 if (value != 0) try out.append(allocator, .{ .add = .{ .offset = cursor, .value = value } });
             },
             .move => |d| cursor += d,
@@ -176,8 +205,8 @@ fn lower(allocator: Allocator, prims: []const Prim) Allocator.Error![]Node {
                     try out.append(allocator, .{ .move = cursor });
                     cursor = 0;
                 }
-                const inner = try lower(allocator, body);
-                if (try recognize(allocator, inner)) |replacement| {
+                const inner = try lower(allocator, body, cfg);
+                if (try recognize(allocator, inner, cfg)) |replacement| {
                     try out.appendSlice(allocator, replacement);
                 } else {
                     try out.append(allocator, .{ .loop = inner });
@@ -190,13 +219,14 @@ fn lower(allocator: Allocator, prims: []const Prim) Allocator.Error![]Node {
     return out.toOwnedSlice(allocator);
 }
 
-/// Inverse of an odd byte modulo 256 (exists for every odd value).
-fn modInverse256(a: u8) u8 {
-    var x: u16 = 1;
-    while (x < 256) : (x += 1) {
-        if ((@as(u16, a) *% x) & 0xff == 1) return @intCast(x);
-    }
-    unreachable; // only called with odd `a`
+/// Inverse of an odd value modulo 2^bits (exists for every odd value). Uses
+/// Newton's iteration, which doubles the number of correct bits each step.
+fn modInverse(a: u64, bits: u16) u64 {
+    const mask: u64 = if (bits >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bits)) - 1;
+    var x: u64 = 1;
+    var i: usize = 0;
+    while (i < 6) : (i += 1) x = (x *% (2 -% (a *% x))) & mask; // 6 steps cover 64 bits
+    return x & mask;
 }
 
 /// Try to replace a loop body with straight-line code.
@@ -206,11 +236,11 @@ fn modInverse256(a: u8) u8 {
 ///     whose control cell (offset 0) has an *odd* net delta:
 ///       - no other cells touched → `set 0` (a clear);
 ///       - other cells touched     → `mul` (a copy/multiply loop).
-///     An odd delta is invertible mod 256, so the loop is guaranteed to reach 0
-///     and its iteration count is a fixed function of the control cell.
+///     An odd delta is invertible modulo 2^cell_bits, so the loop is guaranteed
+///     to reach 0 and its iteration count is a fixed function of the control cell.
 ///
 /// Anything else is left as a real loop.
-fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
+fn recognize(allocator: Allocator, body: []const Node, cfg: Config) Allocator.Error!?[]Node {
     // Pointer scan: `while (cell[0] != 0) ptr += stride`.
     if (body.len == 1 and body[0] == .move) {
         const stride = body[0].move;
@@ -226,12 +256,14 @@ fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
         if (node != .add) return null; // I/O, moves (unbalanced), or nested loops
     }
 
+    const m: i64 = @intCast(cfg.modulus());
+
     // Accumulate the net delta per offset.
     var offsets: Array(isize) = .empty;
-    var sums: Array(i32) = .empty;
+    var sums: Array(i64) = .empty;
     for (body) |node| {
         const off = node.add.offset;
-        const val: i32 = node.add.value;
+        const val: i64 = node.add.value;
         for (offsets.items, 0..) |existing, i| {
             if (existing == off) {
                 sums.items[i] += val;
@@ -243,12 +275,12 @@ fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
         }
     }
 
-    var d0: i32 = 0;
+    var d0: i64 = 0;
     var targets: Array(Target) = .empty;
     for (offsets.items, sums.items) |off, sum| {
-        const factor: u8 = @intCast(@mod(sum, 256));
+        const factor: u32 = @intCast(@mod(sum, m));
         if (off == 0) {
-            d0 = @mod(sum, 256);
+            d0 = @mod(sum, m);
         } else if (factor != 0) {
             try targets.append(allocator, .{ .offset = off, .factor = factor });
         }
@@ -262,7 +294,8 @@ fn recognize(allocator: Allocator, body: []const Node) Allocator.Error!?[]Node {
     if (targets.items.len == 0) {
         result[0] = .{ .set = .{ .offset = 0, .value = 0 } };
     } else {
-        result[0] = .{ .mul = .{ .inv = modInverse256(@intCast(d0)), .targets = try targets.toOwnedSlice(allocator) } };
+        const inv: u32 = @intCast(modInverse(@intCast(d0), cfg.cell_bits));
+        result[0] = .{ .mul = .{ .inv = inv, .targets = try targets.toOwnedSlice(allocator) } };
     }
     return result;
 }
@@ -322,9 +355,9 @@ fn eliminateDeadCode(allocator: Allocator, nodes: []const Node, top: bool) Alloc
                 try out.append(allocator, node);
                 zeros.clearRetainingCapacity(); // frame shifted; known zeros no longer apply
             },
-            .mul => |m| {
+            .mul => |mnode| {
                 try out.append(allocator, node);
-                for (m.targets) |t| setRemove(&zeros, t.offset);
+                for (mnode.targets) |t| setRemove(&zeros, t.offset);
                 try setAdd(allocator, &zeros, 0); // control cell cleared
             },
             .scan => {
@@ -371,7 +404,7 @@ fn emitLine(allocator: Allocator, out: *Array(u8), indent: usize, text: []const 
     try out.append(allocator, '\n');
 }
 
-fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usize) Allocator.Error!void {
+fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usize, cfg: Config) Allocator.Error!void {
     for (nodes) |node| {
         switch (node) {
             .add => |a| {
@@ -391,7 +424,12 @@ fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usiz
             },
             .print => |p| {
                 const cell = try cellExpr(allocator, p.offset);
-                try emitLine(allocator, out, indent, try std.fmt.allocPrint(allocator, "try write_cell(out, {s}, {d});", .{ cell, p.count }));
+                // `.` outputs a byte; wider cells emit their low 8 bits.
+                const value = if (cfg.cell_bits == 8)
+                    cell
+                else
+                    try std.fmt.allocPrint(allocator, "@as(u8, @truncate({s}))", .{cell});
+                try emitLine(allocator, out, indent, try std.fmt.allocPrint(allocator, "try write_cell(out, {s}, {d});", .{ value, p.count }));
             },
             .read => |offset| {
                 const cell = try cellExpr(allocator, offset);
@@ -399,19 +437,20 @@ fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usiz
             },
             .loop => |body| {
                 try emitLine(allocator, out, indent, "while (ptr[0] != 0) {");
-                try emit(allocator, out, body, indent + 1);
+                // Loop bodies are hot: predict the loop-taken path.
+                try emit(allocator, out, body, indent + 1, cfg);
                 try emitLine(allocator, out, indent, "}");
             },
-            .mul => |m| {
+            .mul => |mnode| {
                 // `k` is the loop's iteration count. For the decrement-by-one
-                // case (inv == 255) that is just the control cell's value.
-                const count_expr = if (m.inv == 255)
+                // case (inv == modulus-1) that is just the control cell's value.
+                const count_expr = if (mnode.inv == cfg.modulus() - 1)
                     "ptr[0]"
                 else
-                    try std.fmt.allocPrint(allocator, "(0 -% ptr[0]) *% {d}", .{m.inv});
+                    try std.fmt.allocPrint(allocator, "(0 -% ptr[0]) *% {d}", .{mnode.inv});
                 try emitLine(allocator, out, indent, "{");
                 try emitLine(allocator, out, indent + 1, try std.fmt.allocPrint(allocator, "const k = {s};", .{count_expr}));
-                for (m.targets) |t| {
+                for (mnode.targets) |t| {
                     const cell = try cellExpr(allocator, t.offset);
                     try emitLine(allocator, out, indent + 1, try std.fmt.allocPrint(allocator, "{s} +%= {d} *% k;", .{ cell, t.factor }));
                 }
@@ -419,10 +458,8 @@ fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usiz
                 try emitLine(allocator, out, indent, "}");
             },
             .scan => |stride| {
-                if (stride == 1)
-                    try emitLine(allocator, out, indent, "ptr = scan_right(&data, ptr);")
-                else
-                    try emitLine(allocator, out, indent, "ptr = scan_left(&data, ptr);");
+                const dir = if (stride == 1) "scan_right" else "scan_left";
+                try emitLine(allocator, out, indent, try std.fmt.allocPrint(allocator, "ptr = {s}(Cell, &data, ptr);", .{dir}));
             },
         }
     }
@@ -437,23 +474,24 @@ fn usesInput(nodes: []const Node) bool {
     return false;
 }
 
-pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8)) !void {
+pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8), cfg: Config) !void {
     const base = @embedFile("base.zig");
     try out_buffer.appendSlice(allocator, base);
     try out_buffer.append(allocator, '\n');
 
     const prims = try parse(allocator, buffer);
-    const nodes = try eliminateDeadCode(allocator, try lower(allocator, prims), true);
+    const nodes = try eliminateDeadCode(allocator, try lower(allocator, prims, cfg), true);
 
-    try out_buffer.appendSlice(allocator,
-        \\pub fn main(init: std.process.Init) !void {
+    try out_buffer.appendSlice(allocator, try std.fmt.allocPrint(allocator,
+        \\pub fn main(init: std.process.Init) !void {{
+        \\    const Cell = {s};
         \\    const io = init.io;
         \\
-        \\    var stdout_buffer: [4096]u8 = undefined;
+        \\    var stdout_buffer: [{d}]u8 = undefined;
         \\    var stdout_writer = std.Io.File.Writer.init(.stdout(), io, &stdout_buffer);
         \\    const out = &stdout_writer.interface;
         \\
-    );
+    , .{ cfg.cellType(), cfg.stdout_buffer }));
     if (usesInput(nodes)) {
         try out_buffer.appendSlice(allocator,
             \\    var stdin_buffer: [4096]u8 = undefined;
@@ -462,17 +500,17 @@ pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8)) !voi
             \\
         );
     }
-    try out_buffer.appendSlice(allocator,
-        \\    var data: [std.math.maxInt(u16)]u8 = [1]u8{0} ** std.math.maxInt(u16);
-        \\    var ptr: [*]u8 = &data;
+    try out_buffer.appendSlice(allocator, try std.fmt.allocPrint(allocator,
+        \\    var data: [{d}]Cell = [1]Cell{{0}} ** {d};
+        \\    var ptr: [*]Cell = &data;
         \\
         \\    // program starts
         \\
-    );
+    , .{ cfg.tape_size, cfg.tape_size }));
     // Keep `ptr`/`data` live even when the program is empty.
     if (nodes.len == 0) try out_buffer.appendSlice(allocator, "    _ = &ptr;\n");
 
-    try emit(allocator, out_buffer, nodes, 1);
+    try emit(allocator, out_buffer, nodes, 1, cfg);
 
     try out_buffer.appendSlice(allocator,
         \\
@@ -488,13 +526,14 @@ pub fn generate(allocator: Allocator, buffer: []u8, out_buffer: *Array(u8)) !voi
 // ============================================================================
 
 const testing = std.testing;
+const default_config = Config{};
 
 fn parseSource(allocator: Allocator, src: []const u8) ![]const Prim {
     return parse(allocator, src);
 }
 
 fn lowerSource(allocator: Allocator, src: []const u8) ![]Node {
-    return lower(allocator, try parse(allocator, src));
+    return lower(allocator, try parse(allocator, src), default_config);
 }
 
 fn optimizeSource(allocator: Allocator, src: []const u8) ![]Node {
@@ -568,8 +607,7 @@ test "recognize multiply / copy loops" {
         .{ .mul = .{ .inv = 255, .targets = &.{ .{ .offset = 1, .factor = 2 }, .{ .offset = 2, .factor = 3 } } } },
     }), try lowerSource(a, "[->++>+++<<]"));
 
-    // Generalized: control cell decremented by 3 -> inverse of 3 mod 256 is 171,
-    // and inv(253) == 85.
+    // Generalized: control cell decremented by 3 -> inv(253) mod 256 == 85.
     try testing.expectEqualDeep(@as([]const Node, &.{
         .{ .mul = .{ .inv = 85, .targets = &.{.{ .offset = 1, .factor = 1 }} } },
     }), try lowerSource(a, "[--->+<]"));
@@ -616,6 +654,20 @@ test "dead code elimination trims trailing effect-free work" {
 
     // A program with no output at all optimizes away entirely.
     try testing.expectEqual(@as(usize, 0), (try optimizeSource(a, "+++>++[-]<")).len);
+}
+
+test "modular inverse for wider cells" {
+    // inv(3) mod 2^16 == 43691; 3*43691 == 131073 == 2*65536 + 1.
+    try testing.expectEqual(@as(u64, 43691), modInverse(3, 16));
+    // A 16-bit `[--->+<]` decrements by 3, so its control delta is -3 mod 2^16
+    // (== 65533) and the stored inverse is inv(65533) == 21845.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const nodes = try lower(a, try parse(a, "[--->+<]"), .{ .cell_bits = 16 });
+    try testing.expectEqualDeep(@as([]const Node, &.{
+        .{ .mul = .{ .inv = 21845, .targets = &.{.{ .offset = 1, .factor = 1 }} } },
+    }), nodes);
 }
 
 test "helloworld exercises the multiply optimization" {
