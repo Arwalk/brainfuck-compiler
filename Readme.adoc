@@ -38,11 +38,22 @@ The corpus includes:
 
 * `bench/mandelbrot.bf` — Erik Bosman's mandelbrot viewer, a heavy, loop- and
   arithmetic-dominated workload.
+* `bench/hanoi.bf` — Clifford Wolf's Towers of Hanoi, a large (54 KB) real
+  program dominated by many small loops and state manipulation.
 * `bench/scan.bf` — a scan-dominated workload (`[>]` pointer scans), which the
   compiler lowers to a vectorized byte search.
 
 When a `.sha256` file sits next to the program, the compiled binary's output is
 verified against it before timing.
+
+== Testing
+
+`zig build test` runs the compiler's unit tests. Alongside the pass-level
+checks, a differential test runs two independent interpreters — one over the raw
+brainfuck source, one over the optimized IR — and asserts they produce identical
+output, over a set of curated programs and a deterministic fuzzer. This guards
+the whole optimizer (parse, offset folding, loop recognition, dead-code
+elimination) against semantic drift.
 
 == Why ?
 

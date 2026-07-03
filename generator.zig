@@ -437,7 +437,6 @@ fn emit(allocator: Allocator, out: *Array(u8), nodes: []const Node, indent: usiz
             },
             .loop => |body| {
                 try emitLine(allocator, out, indent, "while (ptr[0] != 0) {");
-                // Loop bodies are hot: predict the loop-taken path.
                 try emit(allocator, out, body, indent + 1, cfg);
                 try emitLine(allocator, out, indent, "}");
             },
@@ -678,4 +677,270 @@ test "helloworld exercises the multiply optimization" {
     const hello_world = @embedFile("helloworld.bf");
     const nodes = try optimizeSource(a, hello_world);
     try testing.expect(containsMul(nodes));
+}
+
+// ---------------------------------------------------------------------------
+// Differential testing
+//
+// Two independent interpreters — one over the raw brainfuck source, one over
+// the optimized `[]Node` IR — must produce the same output. This guards the
+// whole optimizer (parse + lower + recognize + dce) against semantic drift.
+// Both model an 8-bit tape (matching the default cell width) and give up
+// (returning null, so the case is skipped) on out-of-bounds access or when a
+// step/output budget is exceeded, so non-terminating programs never hang.
+// ---------------------------------------------------------------------------
+
+const interp_tape = 8192;
+const interp_ptr0 = interp_tape / 2;
+const interp_out_cap = 200_000;
+
+/// Canonical interpretation of the raw source.
+fn interpretSource(allocator: Allocator, src: []const u8, input: []const u8, limit: usize) !?[]u8 {
+    const match = try allocator.alloc(usize, src.len);
+    var stack: Array(usize) = .empty;
+    for (src, 0..) |c, i| {
+        if (c == '[') {
+            try stack.append(allocator, i);
+        } else if (c == ']') {
+            const j = stack.pop() orelse return null; // unbalanced ] -> skip
+            match[i] = j;
+            match[j] = i;
+        }
+    }
+    if (stack.items.len != 0) return null; // unbalanced [ -> skip
+
+    var tape = [_]u8{0} ** interp_tape;
+    var ptr: usize = interp_ptr0;
+    var out: Array(u8) = .empty;
+    var in_idx: usize = 0;
+    var steps: usize = 0;
+    var ip: usize = 0;
+    while (ip < src.len) : (ip += 1) {
+        steps += 1;
+        if (steps > limit) return null;
+        switch (src[ip]) {
+            '>' => {
+                if (ptr + 1 >= interp_tape) return null;
+                ptr += 1;
+            },
+            '<' => {
+                if (ptr == 0) return null;
+                ptr -= 1;
+            },
+            '+' => tape[ptr] +%= 1,
+            '-' => tape[ptr] -%= 1,
+            '.' => {
+                if (out.items.len >= interp_out_cap) return null;
+                try out.append(allocator, tape[ptr]);
+            },
+            ',' => if (in_idx < input.len) {
+                tape[ptr] = input[in_idx];
+                in_idx += 1;
+            },
+            '[' => if (tape[ptr] == 0) {
+                ip = match[ip];
+            },
+            ']' => if (tape[ptr] != 0) {
+                ip = match[ip];
+            },
+            else => {},
+        }
+    }
+    return out.items;
+}
+
+/// Interpretation of the optimized IR. Mirrors the code generator exactly.
+const Machine = struct {
+    tape: [interp_tape]u8 = [_]u8{0} ** interp_tape,
+    ptr: usize = interp_ptr0,
+    out: Array(u8) = .empty,
+    input: []const u8,
+    in_idx: usize = 0,
+    steps: usize = 0,
+    limit: usize,
+    allocator: Allocator,
+
+    const Fail = error{ Bounds, Limit, OutOfMemory };
+
+    fn at(self: *Machine, offset: isize) Fail!usize {
+        const idx = @as(isize, @intCast(self.ptr)) + offset;
+        if (idx < 0 or idx >= interp_tape) return error.Bounds;
+        return @intCast(idx);
+    }
+
+    fn move(self: *Machine, delta: isize) Fail!void {
+        const p = @as(isize, @intCast(self.ptr)) + delta;
+        if (p < 0 or p >= interp_tape) return error.Bounds;
+        self.ptr = @intCast(p);
+    }
+
+    fn tick(self: *Machine) Fail!void {
+        self.steps += 1;
+        if (self.steps > self.limit) return error.Limit;
+    }
+
+    fn run(self: *Machine, nodes: []const Node) Fail!void {
+        for (nodes) |node| {
+            try self.tick();
+            switch (node) {
+                .add => |a| {
+                    const i = try self.at(a.offset);
+                    self.tape[i] +%= @intCast(a.value);
+                },
+                .set => |s| {
+                    const i = try self.at(s.offset);
+                    self.tape[i] = @intCast(s.value);
+                },
+                .move => |d| try self.move(d),
+                .print => |p| {
+                    const i = try self.at(p.offset);
+                    var n = p.count;
+                    while (n > 0) : (n -= 1) {
+                        if (self.out.items.len >= interp_out_cap) return error.Limit;
+                        try self.out.append(self.allocator, self.tape[i]);
+                    }
+                },
+                .read => |off| {
+                    const i = try self.at(off);
+                    if (self.in_idx < self.input.len) {
+                        self.tape[i] = self.input[self.in_idx];
+                        self.in_idx += 1;
+                    }
+                },
+                .loop => |body| while (self.tape[try self.at(0)] != 0) {
+                    try self.tick();
+                    try self.run(body);
+                },
+                .mul => |m| {
+                    const si = try self.at(0);
+                    const nval = self.tape[si];
+                    const k: u8 = if (m.inv == 255) nval else (0 -% nval) *% @as(u8, @intCast(m.inv));
+                    for (m.targets) |t| {
+                        const ti = try self.at(t.offset);
+                        self.tape[ti] +%= @as(u8, @intCast(t.factor)) *% k;
+                    }
+                    self.tape[si] = 0;
+                },
+                .scan => |stride| while (self.tape[self.ptr] != 0) {
+                    try self.tick();
+                    try self.move(stride);
+                },
+            }
+        }
+    }
+};
+
+fn interpretNodes(allocator: Allocator, nodes: []const Node, input: []const u8, limit: usize) !?[]u8 {
+    var m = Machine{ .input = input, .limit = limit, .allocator = allocator };
+    m.run(nodes) catch |err| switch (err) {
+        error.Bounds, error.Limit => return null,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return m.out.items;
+}
+
+/// Assert the optimizer preserves observable behavior for one program.
+fn diffTest(allocator: Allocator, src: []const u8, input: []const u8, limit: usize) !void {
+    const reference = try interpretSource(allocator, src, input, limit);
+    const nodes = try eliminateDeadCode(allocator, try lower(allocator, try parse(allocator, src), default_config), true);
+    const optimized = try interpretNodes(allocator, nodes, input, limit);
+
+    // Only compare when the reference finished within budget. A correct
+    // optimizer never does *more* work, so if the reference finished the
+    // optimized program must have finished too — and must match.
+    if (reference) |r| {
+        if (optimized) |o| {
+            try testing.expectEqualSlices(u8, r, o);
+        } else {
+            std.debug.print("optimized program failed to reproduce source: \"{s}\"\n", .{src});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "differential: curated programs" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const sierpinski = "++++++++[>+>++++<<-]>++>>+<[-[>>+<<-]+>>]>+[-<<<[->[+[-]+>++>>>-2<<]<[<]>>++++++[<<+++++>>-]+<<++.[-]<<]>.>+[>>]>+]";
+    const cases = [_]struct { src: []const u8, in: []const u8 }{
+        .{ .src = @embedFile("helloworld.bf"), .in = "" },
+        .{ .src = sierpinski, .in = "" },
+        .{ .src = "[-]", .in = "" }, // clear a zero cell
+        .{ .src = "+++[-]", .in = "" }, // clear a set cell
+        .{ .src = "+++[+]", .in = "" }, // clear via increment
+        .{ .src = ">+>+<<", .in = "" }, // offset folding
+        .{ .src = "[->+<]", .in = "" }, // multiply on a zero cell (no-op)
+        .{ .src = "+++++[->++<]>.", .in = "" }, // copy/multiply then print
+        .{ .src = "++++++[--->+++++++<]>.", .in = "" }, // generalized multiply
+        .{ .src = "+++++++[>+++++++<-]>.", .in = "" }, // 49 -> '1'
+        .{ .src = "++++++++[>++++++++<-]>[.-]", .in = "" }, // countdown print
+        // known-zero DCE interactions: printing must not mark a cell zero, and a
+        // clear before reuse must survive.
+        .{ .src = "+++.[-]+.", .in = "" }, // print 3, clear, +1, print 1
+        .{ .src = "+++.[-].", .in = "" }, // print 3, clear, print 0
+        .{ .src = ">+++.[-]+.<", .in = "" }, // same at a nonzero offset
+        .{ .src = "+++++[->++<]>.[-]<+[->++<]>.", .in = "" }, // mul, clear target, mul again
+        .{ .src = "+>+>+>[<]<-.", .in = "" }, // left scan
+        .{ .src = "+>+>+<<[>]>.", .in = "" }, // right scan
+        .{ .src = ",.", .in = "A" }, // echo
+        .{ .src = ",+.", .in = "A" }, // read, bump, print
+        .{ .src = ",[.,]", .in = "Hi\x00" }, // cat until zero
+        .{ .src = "+-+-><><", .in = "" }, // fully cancelling
+        .{ .src = "", .in = "" }, // empty
+        .{ .src = "comment only, no ops", .in = "" },
+    };
+    for (cases) |c| try diffTest(a, c.src, c.in, 100_000_000);
+}
+
+var fuzz_state: u64 = 0x9e3779b97f4a7c15;
+
+fn nextRand() u64 {
+    fuzz_state = fuzz_state *% 6364136223846793005 +% 1442695040888963407;
+    return fuzz_state >> 33;
+}
+
+// Self-balanced snippets the optimizer recognizes (clears, copy/multiply loops,
+// scans). Sprinkling them in makes the fuzzer exercise those rewrites — and
+// their interaction with surrounding reuse — far more often than random
+// bracket placement would.
+const motifs = [_][]const u8{ "[-]", "[+]", "[->+<]", "[->++<]", "[--->+<]", "[>]", "[<]", "[->+>+<<]" };
+
+fn randomProgram(allocator: Allocator) ![]u8 {
+    var buf: Array(u8) = .empty;
+    var depth: usize = 0;
+    const len = 8 + (nextRand() % 40);
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        const r = nextRand() % 100;
+        if (r < 12) {
+            try buf.appendSlice(allocator, motifs[nextRand() % motifs.len]);
+            continue;
+        }
+        const ch: u8 = if (r < 30) '+' else if (r < 48) '-' else if (r < 62) '>' else if (r < 76) '<' else if (r < 84) '.' else if (r < 90) ',' else if (r < 96) blk: {
+            depth += 1;
+            break :blk '[';
+        } else if (depth > 0) blk: {
+            depth -= 1;
+            break :blk ']';
+        } else '+';
+        try buf.append(allocator, ch);
+    }
+    while (depth > 0) : (depth -= 1) try buf.append(allocator, ']');
+    return buf.items;
+}
+
+test "differential: random programs" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A modest per-program step budget keeps non-terminating programs cheap to
+    // skip; the terminating majority still fuzzes the optimizer broadly.
+    var i: usize = 0;
+    while (i < 400) : (i += 1) {
+        const src = try randomProgram(a);
+        try diffTest(a, src, "\x03\x01\x00", 300_000);
+    }
 }
